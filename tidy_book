@@ -1,0 +1,343 @@
+#install.packages(c("tidyverse", "readxl", "lubridate", "nycflights13", "plotly"))
+#install.packages(c("ggplot2", "splines", "modelr", "gapminder", "Lahman","dplyr"))
+#install.packages(c("RMySQL", "DBI"))
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(nycflights13) 
+library(plotly)
+library(ggplot2)
+library(splines)
+library(modelr)
+library(gapminder)
+library(Lahman)
+library(dplyr)
+library(DBI)
+library(proto)
+library(gsubfn)
+library(RMySQL)
+library(RSQLite)
+library(sqldf)
+library(data.table)
+
+##1. split mid() de acuerdo a characters
+setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/05_01/data-raw")
+transport_data <- read_xlsx("transit-data.xlsx", sheet = "transport data", skip = 1)
+colnames(transport_data) <- tolower(make.names(colnames(transport_data)))
+
+transport_data <- transport_data %>%
+  mutate(date = if_else(grepl("-", date), ymd(date), ymd("1900-01-01") + days(date))) %>%
+  mutate(percent.of.all.items = 100 * number.of.items / sum(number.of.items))
+
+transport_data <- transport_data %>%
+  separate(sender.location, c("sender.country", "sender.city"), sep = ",", extra = "merge") %>%
+  separate(receiver.location, c("receiver.country", "receiver.city"), sep = ",", extra = "merge") %>%
+  separate(receiver.city, c("receiver.city", "receiver.state"), sep = "\\(", fill = "right") %>%
+  mutate(receiver.state = gsub("\\)", "", receiver.state)) %>%
+  separate(sender.city, c("sender.city", "sender.state"), sep = "\\(", fill = "right") %>%
+  mutate(sender.state = gsub("\\)", "", sender.state))
+
+grouped_transport_data <- transport_data %>%
+  filter(!complete.cases(.)) %>% 
+  group_by(receiver.country) %>%
+  arrange(receiver.country) %>%
+  select(receiver.country, everything())
+
+save(grouped_transport_data, file ="grouped_transport_data.rdata")
+
+#####2. sampling ###########write.csv(samplingSamplen,"sample_50replacement.csv")
+samplingFrac = grouped_transport_data %>% sample_frac(0.5)
+samplingSamplen = grouped_transport_data %>% sample_n(50, replace=TRUE) ##El minomo es 24. el data set esta agrupado por receiver.country y USA tiene 24rows, entonces si yo pongo sample_n = 24 va a tomar a randomly 24 rows por receiver.country
+
+
+##3. calculation within groups/sub-groups ##
+setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/05_02/data")
+dataset = read_csv("transport_data.csv")
+ 
+grouped_d = dataset %>%
+  group_by(receiver.country,receiver.city) %>%
+  select(date,number.of.items)
+
+grouped_d2 = grouped_d %>% 
+  sample_frac(0.1) %>% #el numero de observaciones es igual a el 10% de cada grupo
+  mutate(percent.items = (100 * number.of.items)/sum(number.of.items)) %>%
+  mutate(sum(percent.items)) 
+ # %>% View() #para ver en pestana nueva
+
+write.csv(grouped_d2,"grouped_Rcountry_Rcity.csv")
+
+##4. Count() within groups/sub-groups ##
+setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/05_03/data")
+dataset = read_csv("transport_data.csv")
+
+grouped_d = dataset %>%
+  group_by(receiver.country,receiver.city) %>%
+  select(date,number.of.items) %>%
+  sample_frac(0.1) #el numero de observaciones es igual a el 10% de cada grupo
+##Add new column count() within groups  
+grouped_d %>%
+  mutate(members = n()) %>%
+  select(-date,-number.of.items) %>%
+  unique() %>%
+  View()
+##si quiero saber la cantidad de grupos distintos
+grouped_d %>%
+  n_groups()
+
+##5. graficos de tendencia, within groups ##
+setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/05_04/data")
+dataset = read_csv("transport_data.csv")
+
+dataset = dataset %>% 
+  arrange(date) %>% #ordenar la columna date
+  group_by(receiver.city) %>%
+  mutate(running.total = cumsum(number.of.items)) #cummean para ver el promedio y cumsum para ver el acumulado
+
+  #crear el chart
+dataset %>%
+  ggplot(aes(x=date, y = running.total, color = receiver.city)) + geom_line()
+
+##6. crear grafico luego de cierto valor (Antes del valor)
+dataset = read_csv("transport_data.csv")
+
+dataset = dataset %>% 
+  arrange(date) %>% #ordenar la columna date
+  group_by(receiver.city) %>%
+  mutate(running.total = cummean(number.of.items)) %>%
+  filter(cumall(number.of.items < 453)) %>% #cumall para los valores anteriores
+  summarise(events.before.peak = n()) 
+
+dataset %>%
+  ggplot(aes(x = receiver.city ,y = events.before.peak)) + geom_col(fill = "blue") + coord_flip()
+
+## crear grafico luego de cierto valor (despues del valor)
+dataset = read_csv("transport_data.csv")
+
+dataset = dataset %>% 
+  arrange(date) %>% #ordenar la columna date
+  group_by(receiver.city) %>%
+  mutate(running.total = cummean(number.of.items)) %>%
+  filter(cumany(number.of.items > 453)) %>% ##cumany para los valor despues
+  summarise(events.after.peak = n()) 
+
+dataset %>%
+  ggplot(aes(x = receiver.city ,y = events.after.peak)) + geom_col(fill = "red") + coord_flip()
+
+
+##7. count() within groups ##
+setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/05_04/data")
+dataset = read_csv("transport_data.csv")
+
+dataset %>% 
+  group_by(receiver.country, receiver.city) %>%
+  summarise(observations = n()) %>% ## bota las columnas de los group_by y el count() within groups
+  View()
+
+  ##crate dataframe ##
+  datasetEjemplo = data_frame(
+    name = c(letters,LETTERS),
+    group = rep(c("uno","dos","tres","cuatro"),each=13),
+    value = 1:52,
+    normal.var = rnorm(52,mean=100,sd=5),
+    uniform.var = runif(52,min=1000,max=2000),
+    logical.var = sample(c(TRUE,FALSE),size=52,replace=TRUE)
+  )#data_frame
+    
+  datasetEjemplo %>% 
+    group_by(group) %>% View()
+  
+  datasetEjemplo %>% 
+    group_by(group) %>%
+    summarise_if(is.numeric,mean) %>%
+    View()
+  
+  ##7. british weather example ##
+  setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/06_02/data")
+  british_weather = read_csv("british_weather.csv")
+  
+  dataset = british_weather %>%
+    mutate(tdiff=tmax-tmin) %>%
+    group_by(airport,mm) %>%
+    summarise(avg.tdiff = mean(tdiff,na.rm=TRUE)) #se agrega 'na.rm=TRUE' para que los NA no malogren la operacion matematica 
+    #Agregar grafico 
+  dataset %>%
+    ggplot()+
+    geom_point(aes(x = mm , y = avg.tdiff, col = airport)) +  geom_line(aes(x = mm , y = avg.tdiff, col = airport))
+    
+   ##8. agregar forecast linear model ##
+  library("tidyverse")
+  library("splines")
+  library("modelr")
+  setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/06_02/data")
+  monthly_tdiff <- read_csv("long_monthly_tdiff.csv")
+  
+  by_airport <- monthly_tdiff %>% 
+    group_by(airport) %>% 
+    nest() # tidyr
+  
+  airport_model <- function(df) {
+    lm(avg.tdiff ~ ns(month, 5), data = df)
+  }
+  
+  by_airport <- by_airport %>% 
+    mutate(model = map(data, airport_model)) # purrr
+  
+  by_airport <- by_airport %>% 
+    mutate(
+      predictors = map2(data, model, add_predictions)
+    )
+  by_airport
+   #unnest
+   data_weather_predictors = unnest(by_airport,predictors)
+   #grafico
+   data_weather_predictors %>% ggplot()+
+     geom_point(aes(x = month , y = avg.tdiff, col = airport)) +  geom_line(aes(x = month , y = pred, col = airport))
+   
+   #9. de wide a long
+   setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/06_02/data")
+   dataset = read_csv("wide_monthly_tdiff.csv")
+   
+   dataset %>% 
+     gather(location,tdifference, contains("tdiff"))
+   #ejemplo
+   dataseti = read_csv("Theo_vs_actual.csv")
+  longset_esky = dataseti %>% 
+     gather(Category,Qty, contains("w"))
+   View(longset_esky)
+   #10. de long a wide
+   setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/06_04/data")
+   dir()
+   dataset = read_csv("long_monthly_tdiff.csv")
+   
+   dataset %>% spread(airport,avg.tdiff) #airport es el nombre de las columnas
+   dataset %>% spread(month,avg.tdiff)   # month es columnas
+   
+   #11. funciones
+   setwd("C:/yoshio uts/LYNDA/R_Tidyverse/Exercise Files/07_01/data")
+   dataset = read_csv("transport_data.csv")
+   names(dataset) #nombres de las columnas
+   selected_columns = c("sender.c","receiver.state","date","receiver.city")
+   
+   dataset %>% select(contains(selected_columns))
+   
+   #summarise
+   dataset %>% 
+     group_by(receiver.country) %>%
+     summarise(summary = mean(number.of.items))
+   
+   
+   
+   
+    #--------BOOK : R for Data Science----------------------------#
+   # http://r4ds.had.co.nz/data-visualisation.html#statistical-transformations
+   #three data packages from outside the tidyverse
+   install.packages(c("nycflights13", "gapminder", "Lahman"))
+   
+   library(plotly)
+   library(ggplot2)
+   library(tidyverse)
+   
+   grafica = ggplot(data = mpg) + geom_point(mapping = aes(x = displ, y = hwy, color = class, size=cty))
+   ggplotly(grafica)
+   
+   
+   ggplot(data = mpg) + geom_point(mapping = aes(x = displ, y = hwy)) + facet_wrap(~ class, ncol = 2) #tambien puede haber nrow
+   ggplot(data = mpg) + geom_point(mapping = aes(x = displ, y = hwy)) + facet_grid(drv ~ .) #breakdown por variable drv horizontal
+   ggplot(data = mpg) + geom_point(mapping = aes(x = displ, y = hwy)) + facet_grid(. ~ drv) #vertical
+   
+   # left
+   ggplot(data = mpg) + 
+     geom_point(mapping = aes(x = displ, y = hwy))
+   
+   # right smooth
+   ggplot(data = mpg) + 
+     geom_smooth(mapping = aes(x = displ, y = hwy))
+   # with different line type overlaying multiple geoms
+   grafica = ggplot(data = mpg) + 
+     geom_smooth(mapping = aes(x = displ, y = hwy, linetype = drv, color = drv)) + 
+     geom_point(mapping = aes(x = displ, y = hwy, color = drv, size = 1.2), show.legend = FALSE)
+   ggplotly(grafica)
+   # with filtered data in smooth
+   grafica = ggplot(data = mpg,mapping = aes(x = displ, y = hwy)) + 
+     geom_smooth(data = filter(mpg, class == "subcompact"),mapping = aes(color = class)) + 
+     geom_smooth(data = filter(mpg, class == "midsize"),mapping = aes(color = class)) +
+     geom_point(  mapping = aes(color = drv, size = 1.05), position = "jitter",show.legend = FALSE)
+   ggplotly(grafica)
+   # with filtered data in line (2 version)
+   grafica = ggplot(data = mpg,mapping = aes(x = displ, y = hwy)) + 
+     geom_line(data = filter(mpg, class == "subcompact"),mapping = aes(color = class),linetype = "dashed") + 
+     geom_line(data = filter(mpg, class == "midsize"),mapping = aes(color = class)) +
+     geom_point(  mapping = aes(color = drv, size = 1.05), position = "jitter",show.legend = FALSE)
+   ggplotly(grafica)
+   # Bar chart
+   grafica = ggplot(data = diamonds) + geom_bar(mapping = aes(x = cut, fill=clarity,color=color))
+   ggplotly(grafica)
+   #al tope
+   ggplot(data = diamonds) + 
+     geom_bar(mapping = aes(x = cut, fill = clarity), position = "fill")
+   #position = "dodge" places overlapping objects directly beside one another. This makes it easier to compare individual values.
+   d = ggplot(data = diamonds) + 
+     geom_bar(mapping = aes(x = cut, fill = clarity), position = "dodge")
+   ggplotly(d)
+   
+   #box plot
+   d=ggplot(data = mpg, mapping = aes(x = class, y = hwy)) + 
+     geom_boxplot() +
+     coord_flip() #para verlo en horizontal
+   ggplotly(d)
+   
+   
+   filter(mpg, cyl == 8)
+   filter(diamonds, carat > 3)
+   
+   #5 Data transformation   # dplyr package ----------------------------------------------------------------------------
+   library(nycflights13)
+   library(tidyverse)
+   
+  # Filter rows with filter()--------------------------------------------------------------------------------
+   filter(flights, flights$month == 1, flights$day == 1)
+   
+   
+   near(1 / 49 * 49, 1) #no se puede usar == con valore numericos para obtener un TRUE
+   
+   # %in%
+   nov_dec <- filter(flights, month %in% c(11, 12))
+   #View(nov_dec)
+   arranged = arrange(nov_dec,sched_dep_time,arr_time,dep_delay)
+   #View(arranged)
+   
+   didi = arranged$dep_delay
+   reorderColumnData = data.frame(didi ,arranged$sched_arr_time ,arranged$flight ,arranged$month, arranged$carrier , arranged$day)
+   
+   head(reorderColumnData)
+   
+   colna = colnames(reorderColumnData)
+   df = data.frame(colna)
+   num = grep("arr", colna)
+   df[num,]
+   
+   if(length(num) > 1){
+     FilteredDataset1 = data.frame(x=df[num,])
+     num = grep("mo", FilteredDataset1$x)
+     FilteredDataset1[num,]
+   }else{
+     print(df[num,])
+   }
+   
+   
+   #multiple patterns
+   grep("gh|mon|day", colna, value = TRUE)
+   rename(flights,yearrrwi=year) #cambiar nombre a las columnas
+   
+   filter(flights, arr_delay <= 120, dep_delay <= 120)
+   
+   
+  # If you want to determine if a value is missing, use is.na():
+     x=NA
+     is.na(x)
+  # Como filtrar los NAs   
+      df <- tibble(x = c(1, NA, 3,'yoshio',24,05,1989,'hola'))
+      df <- data.frame(x = c(1, 0.2,24,05,1989,NA) )
+      sapply(df$x,class)
+      filter(df, is.numeric(x) | is.na(x))
+      rename(flights,yearrrwi=year) #cambiar nombre a las columnas
